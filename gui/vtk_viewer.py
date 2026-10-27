@@ -228,10 +228,10 @@ class VTKStructureViewer(QWidget):
         elements_df: pl.DataFrame,
         displacements: Dict[int, Tuple[float, float, float]],
         stresses: Dict[int, float],
-        disp_scale: float = 800.0
+        disp_scale: float = 150.0
     ) -> None:
-        """Ultra-fast lightweight update: avoids re-tubing and re-creating actors on every tick.
-        Uses disp_scale=800.0 so dynamic oscillations and wave transmission are clearly visible."""
+        """Lightweight frame update avoiding re-tubing and re-creating heavy actors on every tick.
+        Uses calibrated disp_scale=150.0 to portray solid structural engineering sway instead of elastic jelly."""
         self.plotter.clear()
         node_coords = {}
         points_list = []

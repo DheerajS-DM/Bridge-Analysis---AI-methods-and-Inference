@@ -6,10 +6,12 @@ class OntologicalSemanticNet:
     """Maps FEA physical topology into a Frame-and-Slot Ontological Semantic Multigraph."""
     def __init__(self):
         self.graph = nx.MultiDiGraph()
+        self._betweenness_cache: Dict[int, float] = {}
 
     def build_network(self, nodes_df: pl.DataFrame, elements_df: pl.DataFrame) -> None:
         """Constructs topological graph with node slots and element frames."""
         self.graph.clear()
+        self._betweenness_cache.clear()
         for row in nodes_df.iter_rows(named=True):
             self.graph.add_node(
                 row["id"],
@@ -28,6 +30,17 @@ class OntologicalSemanticNet:
                 yield_stress=row["yield_stress_fy"],
                 plastic_capacity=row["plastic_hinge_capacity"]
             )
+
+        # Compute betweenness centrality for structural load path criticality
+        try:
+            undirected = self.graph.to_undirected()
+            self._betweenness_cache = nx.betweenness_centrality(undirected)
+        except Exception:
+            self._betweenness_cache = {n: 0.1 for n in self.graph.nodes()}
+
+    def get_betweenness_centrality(self, node_id: int) -> float:
+        """Returns normalized structural betweenness centrality metric."""
+        return self._betweenness_cache.get(node_id, 0.05)
 
     def get_adjacent_elements(self, node_id: int) -> List[int]:
         """Retrieves list of connected frame element IDs for a structural node."""

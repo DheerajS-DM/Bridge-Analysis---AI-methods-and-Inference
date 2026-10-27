@@ -11,6 +11,8 @@ from PyQt6.QtCore import Qt, QTimer
 from gui.vtk_viewer import VTKStructureViewer
 from gui.dashboard_widget import TelemetryDashboardWidget
 from gui.gantt_widget import GanttChartWidget
+from gui.retrofit_explainer_widget import RetrofitExplainerWidget
+from gui.agent_dashboard_widget import AgentDashboardWidget
 from gui.analysis_popup import AnalysisOverlayPopup
 from gui.dynamic_playback_bar import DynamicPlaybackBar
 from gui.damage_diagnostics_panel import DamageDiagnosticsPanel
@@ -142,16 +144,23 @@ class MainWindow(QMainWindow):
         self.btn_inject_attack = QPushButton("Execute Multi-Stage Disaster Injection")
         self.btn_plan_maintenance = QPushButton("Synthesize Indian Standard Retrofit Plan")
         self.btn_export_report = QPushButton("Export Forensic Structural Report")
+        self.btn_reset_bridge = QPushButton("Reset Bridge to Pristine State")
+        self.btn_reset_bridge.setStyleSheet(
+            "QPushButton { background-color: #313244; color: #fab387; border: 1px solid #fab387; border-radius: 4px; padding: 7px 12px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #fab387; color: #11111b; }"
+        )
 
         self.btn_run_sim.clicked.connect(self.on_run_fea_step)
         self.btn_inject_attack.clicked.connect(self.on_execute_attack)
         self.btn_plan_maintenance.clicked.connect(self.on_synthesize_plan)
         self.btn_export_report.clicked.connect(self.on_export_report)
+        self.btn_reset_bridge.clicked.connect(self.on_reset_bridge_state)
 
         control_panel.addWidget(self.btn_run_sim)
         control_panel.addWidget(self.btn_inject_attack)
         control_panel.addWidget(self.btn_plan_maintenance)
         control_panel.addWidget(self.btn_export_report)
+        control_panel.addWidget(self.btn_reset_bridge)
 
         # Terminal Log
         control_panel.addWidget(QLabel("<b>Autonomous Agent Reasoning Terminal</b>"))
@@ -175,16 +184,33 @@ class MainWindow(QMainWindow):
         vtk_layout.addWidget(self.vtk_viewer, 1)
         vtk_layout.addWidget(self.playback_bar)
 
+        self.agent_dashboard = AgentDashboardWidget()
         self.diagnostics_panel = DamageDiagnosticsPanel()
         self.diagnostics_panel.elementSelected.connect(self._on_diagnostic_element_selected)
 
         self.dashboard = TelemetryDashboardWidget()
+
+        # Retrofit Tab with Splitter: Gantt Chart (Top) & Explainer Rationale (Bottom)
+        retrofit_container = QWidget()
+        retrofit_layout = QVBoxLayout(retrofit_container)
+        retrofit_layout.setContentsMargins(0, 0, 0, 0)
+        self.retrofit_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.retrofit_splitter.setStyleSheet("QSplitter::handle { background-color: #313244; height: 3px; }")
+
         self.gantt_chart = GanttChartWidget()
+        self.retrofit_explainer = RetrofitExplainerWidget()
+        self.gantt_chart.actionSelected.connect(self.retrofit_explainer.display_action_by_index)
+
+        self.retrofit_splitter.addWidget(self.gantt_chart)
+        self.retrofit_splitter.addWidget(self.retrofit_explainer)
+        self.retrofit_splitter.setSizes([380, 280])
+        retrofit_layout.addWidget(self.retrofit_splitter)
 
         self.tabs.addTab(vtk_container, "3D Forensic Simulation & Dynamic Playback")
+        self.tabs.addTab(self.agent_dashboard, "Agentic AI Inference & Reasoning HUD")
         self.tabs.addTab(self.diagnostics_panel, "Forensic Damage Diagnostics & IRC Codes")
         self.tabs.addTab(self.dashboard, "Structural Telemetry & Stress Curves")
-        self.tabs.addTab(self.gantt_chart, "IRC Rehabilitation Gantt Schedule")
+        self.tabs.addTab(retrofit_container, "IRC Rehabilitation Schedule & Engineering Rationale")
 
         main_layout.addLayout(control_panel, 2)
         main_layout.addWidget(self.tabs, 5)
@@ -341,7 +367,7 @@ class MainWindow(QMainWindow):
         self.log_terminal("Agentic Method 1: Bayesian Posterior Formulation P(Hazard | Theta)...", "AGENT")
 
         attack_vec, thought_logs, thought_data = self.utility_engine.select_optimal_attack_target(
-            self.state_mgr.df_nodes, self.state_mgr, self.semantic_net, weather
+            self.state_mgr.df_nodes, self.state_mgr, self.semantic_net, weather, fea_solver=self.fea_solver
         )
 
         for line in thought_logs:
@@ -349,13 +375,21 @@ class MainWindow(QMainWindow):
 
         self.log_terminal("Agentic Method 2: Heuristic Weak-Point Search across structural network...", "AGENT")
 
-        # Start surface-level scanning animation across elements
+        # Update Agent Intelligence Dashboard
+        if "posteriors" in thought_data:
+            self.agent_dashboard.update_bayesian_distribution(thought_data["posteriors"])
+        if "top_candidates" in thought_data:
+            self.agent_dashboard.update_utility_scan(thought_data["top_candidates"])
+
+        # Execute surface-level member scanning animation across the bridge before showing dialog
         coords_map = {row["id"]: (float(row["x"]), float(row["y"]), float(row["z"])) for row in self.state_mgr.df_nodes.iter_rows(named=True)}
         elements_list = self.state_mgr.df_elements.iter_rows(named=True)
         self._scan_elements_queue = [(coords_map.get(e["node_start"]), coords_map.get(e["node_end"]), e["id"]) for e in elements_list if coords_map.get(e["node_start"]) and coords_map.get(e["node_end"])]
 
         # Highlight candidate nodes on 3D view
         self.vtk_viewer.highlight_candidate_nodes(thought_data["top_candidates"], attack_vec.target_node_id)
+        if self._scan_elements_queue:
+            self._scan_timer.start(40) # Rapid 40ms frame scan
 
         # Show Thought-Process Modal Dialog
         popup = AnalysisOverlayPopup(thought_data, self)
@@ -445,8 +479,10 @@ class MainWindow(QMainWindow):
         )
         self.current_plan = pop_plan
         self.gantt_chart.set_plan(pop_plan)
-
         real_steps = [s for s in pop_plan.steps if s.id not in ["Start", "Finish"]]
+        self.retrofit_explainer.set_actions(real_steps)
+        self.agent_dashboard.update_pop_plan(real_steps)
+
         self.log_terminal(f"IRC Retrofit Schedule Synthesized ({len(real_steps)} Interventions). Critical Path: {pop_plan.critical_path_days} Days. Budget: INR {pop_plan.total_cost_inr:,.0f}.", "PLAN")
         for s in real_steps:
             self.log_terminal(f"   - [{s.standard_code} {s.clause_reference}] {s.name}: INR {s.cost_inr:,.0f} | Duration: {s.duration_days}d", "PLAN")
@@ -472,7 +508,7 @@ class MainWindow(QMainWindow):
             disp_scale=200.0
         )
         self.log_terminal(f"Verification Re-Solve Completed: Stress contours alleviated. Post-retrofit peak stress: {peak_stress/1e6:.1f} MPa (Factor of safety restored).", "FEA")
-        self.tabs.setCurrentIndex(3)
+        self.tabs.setCurrentIndex(4) # Retrofit schedule and explainer tab
 
     def on_export_report(self):
         """Exports full forensic audit report and BOQ to user-selected folder."""
@@ -516,3 +552,24 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.vtk_viewer.highlight_element_conformal(element_id, color="#fab387")
         self.log_terminal(f"Conformally highlighted compromised Element #{element_id} in 3D viewport.", "SYSTEM")
+
+    def on_reset_bridge_state(self):
+        """Instantly restores the bridge model to its pristine virgin state,
+        clearing damage, transient snapshots, resetting the OpenSees domain,
+        and re-centering the 3D VTK camera."""
+        current_idx = self.model_combo.currentIndex()
+        self.sim_step_count = 0
+        self.step_history.clear()
+        self.peak_stress_history.clear()
+        self.damage_reports.clear()
+        self.current_plan = None
+        self.dynamic_snapshots.clear()
+        self.last_stresses.clear()
+
+        # Reload clean benchmark geometry and rebuild OpenSees domain
+        self.load_bridge_model(current_idx)
+        self.retrofit_explainer.clear_display()
+        self.vtk_viewer.clear_scan_flash()
+        self.vtk_viewer.plotter.reset_camera()
+        self.log_terminal("Bridge restored to pristine virgin state. All plastic deformations and stress histories purged.", "SYSTEM")
+

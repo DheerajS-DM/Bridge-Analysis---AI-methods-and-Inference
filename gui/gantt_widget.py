@@ -1,19 +1,33 @@
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtGui import QPainter, QColor
-from PyQt6.QtCore import Qt, QRectF
-from core.schema import PartialOrderPlan
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal
+from core.schema import PartialOrderPlan, PlanAction
 
 class GanttChartWidget(QWidget):
     """Custom PyQt6 QPainter Gantt Chart visualizer displaying Indian Standard (IRC)
     retrofit schedules, phase groupings, and cost breakdowns in INR."""
 
+    actionSelected = pyqtSignal(int)  # emits index of selected action
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.plan: PartialOrderPlan = None
+        self._task_rects = []
+        self.selected_idx = 0
 
     def set_plan(self, plan: PartialOrderPlan) -> None:
         self.plan = plan
+        self.selected_idx = 0
         self.update()
+
+    def mousePressEvent(self, event):
+        pos = event.position()
+        for idx, rect in self._task_rects:
+            if rect.contains(pos):
+                self.selected_idx = idx
+                self.actionSelected.emit(idx)
+                self.update()
+                break
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -21,6 +35,7 @@ class GanttChartWidget(QWidget):
 
         # Dark Slate Theme Background
         painter.fillRect(self.rect(), QColor("#11111b"))
+        self._task_rects.clear()
 
         if not self.plan or not self.plan.steps:
             painter.setPen(QColor("#a6adc8"))
@@ -65,7 +80,7 @@ class GanttChartWidget(QWidget):
             start_x = 240 + (current_day - 1.0) * 22
 
             # Left Label: Task Name + Governing Standard
-            painter.setPen(QColor("#cdd6f4"))
+            painter.setPen(QColor("#89b4fa") if i == self.selected_idx else QColor("#cdd6f4"))
             label_text = f"{step.name[:26]} [{code_ref}]"
             painter.drawText(QRectF(15, y, 220, 30), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label_text)
 
@@ -73,9 +88,10 @@ class GanttChartWidget(QWidget):
             phase = getattr(step, "phase", "primary")
             color = phase_colors.get(phase, QColor("#5b708b"))
             painter.setBrush(color)
-            painter.setPen(QColor("#181825"))
+            painter.setPen(QColor("#89b4fa") if i == self.selected_idx else QColor("#181825"))
             bar_rect = QRectF(start_x, y, bar_width, 28)
             painter.drawRoundedRect(bar_rect, 4, 4)
+            self._task_rects.append((i, QRectF(15, y, start_x + bar_width + (curing * 22), 28)))
 
             # Curing Bar if applicable
             if curing > 0:
@@ -93,3 +109,4 @@ class GanttChartWidget(QWidget):
 
             y += 38
             current_day += (duration + curing)
+
