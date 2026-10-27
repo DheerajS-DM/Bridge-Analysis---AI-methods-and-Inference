@@ -141,6 +141,14 @@ class OpenSeesFEASolver:
         ts_tag = 8501
         pattern_tag = 8502
         try:
+            try:
+                ops.remove('loadPattern', pattern_tag)
+            except Exception:
+                pass
+            try:
+                ops.remove('timeSeries', ts_tag)
+            except Exception:
+                pass
             ops.timeSeries('Path', ts_tag, '-dt', float(time_arr[1] - time_arr[0]), '-values', *accel_ms2)
             ops.pattern('UniformExcitation', pattern_tag, direction_dof, '-accel', ts_tag)
         except Exception:
@@ -261,6 +269,11 @@ class OpenSeesFEASolver:
                 transf_tag = 9002 if (dx < 1e-5 and dy < 1e-5) else 9001
 
                 try:
+                    # Remove existing element before redefining with retrofitted section
+                    try:
+                        ops.remove('element', eid)
+                    except Exception:
+                        pass
                     ops.element(
                         'elasticBeamColumn',
                         eid,

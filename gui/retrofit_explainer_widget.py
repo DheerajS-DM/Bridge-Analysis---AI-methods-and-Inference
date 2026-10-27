@@ -4,11 +4,11 @@ Detailed engineering rationale, IRC standard citations, capacity restoration met
 and causal dependency inspection for bridge retrofit interventions.
 """
 
-from PySide6.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextBrowser, 
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame, QSplitter
 )
-from PySide6.QtCore import Qt
+from PyQt6.QtCore import Qt
 from typing import Optional, List
 from core.schema import PlanAction
 

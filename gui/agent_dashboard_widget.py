@@ -7,11 +7,11 @@ Agentic Intelligence Dashboard presenting the 4 core AI engines:
 4. Partial Order Planning (POP) with Causal Protection
 """
 
-from PySide6.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, 
     QProgressBar, QScrollArea, QGridLayout, QTextBrowser
 )
-from PySide6.QtCore import Qt
+from PyQt6.QtCore import Qt
 from typing import Dict, Any, Optional
 
 class AgentDashboardWidget(QWidget):
