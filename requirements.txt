@@ -1,0 +1,22 @@
+# Core Computational FEA Engine
+openseespy>=3.5.0
+
+# Data Analytics & Columnar Engine
+polars>=0.20.0
+pyarrow>=15.0.0
+
+# Classical AI & Mathematical Core (Pin NumPy < 2.0 for OpenSeesPy C-ABI compatibility)
+numpy>=1.26.0,<2.0.0
+scipy>=1.11.4
+networkx>=3.2
+pydantic>=2.6.0
+
+# Desktop GUI & Visualizations (PyQt6 + VTK/PyVista OpenGL Engine)
+PyQt6>=6.6.0
+pyqtgraph>=0.13.0
+pyvista>=0.43.0
+pyvistaqt>=0.11.0
+matplotlib>=3.8.0
+
+# Testing Framework
+pytest>=8.0.0

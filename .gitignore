@@ -1,0 +1,40 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# IDE & Editor Configs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Dynamic simulation logs, temporary output, & checkpoints
+data_logs/
+scratch/
+*.log
+*.tmp
+*.bak
+
+# OpenSees output files & recordings
+*.out
+*.hdf5
+*.vtu
