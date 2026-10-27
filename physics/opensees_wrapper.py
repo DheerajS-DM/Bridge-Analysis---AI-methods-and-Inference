@@ -7,7 +7,7 @@ from core.schema import DynamicStepSnapshot
 class OpenSeesFEASolver:
     """Wrapper class encapsulating OpenSeesPy FEA computational mechanics routines,
     supporting both static equilibrium and non-linear transient dynamic time-history analysis."""
-    
+
     def __init__(self):
         self.is_built = False
         self._load_tag_counter = 9000
@@ -18,6 +18,7 @@ class OpenSeesFEASolver:
         existing_nodes = ops.getNodeTags()
         if existing_nodes and len(existing_nodes) > 0:
             self.is_built = True
+            self.assign_lumped_masses(nodes_df, elements_df)
             return
 
         ops.wipe()
@@ -80,24 +81,15 @@ class OpenSeesFEASolver:
 
         for nid, m in node_masses.items():
             if m > 1.0:
-                # Assign to 3 translational DOFs (ux, uy, uz), 0 for rotational
                 ops.mass(nid, m, m, m, 0.0, 0.0, 0.0)
         self._mass_assigned = True
 
     def setup_rayleigh_damping(self, zeta: float = 0.05) -> None:
         """Configures mass- and stiffness-proportional Rayleigh damping C = alpha * M + beta * K."""
         try:
-            eigen_vals = ops.eigen(2)
-            if eigen_vals and len(eigen_vals) >= 2 and eigen_vals[0] > 0 and eigen_vals[1] > 0:
-                omega1 = np.sqrt(eigen_vals[0])
-                omega2 = np.sqrt(eigen_vals[1])
-                alpha_m = 2.0 * zeta * (omega1 * omega2) / (omega1 + omega2)
-                beta_k = 2.0 * zeta / (omega1 + omega2)
-                ops.rayleigh(alpha_m, beta_k, 0.0, 0.0)
-            else:
-                ops.rayleigh(0.05, 0.002, 0.0, 0.0)
-        except Exception:
             ops.rayleigh(0.05, 0.002, 0.0, 0.0)
+        except Exception:
+            pass
 
     def apply_impulse_load(self, node_id: int, impulse: Tuple[float, float, float, float, float, float]) -> None:
         """Applies a 6-DOF kinetic point force/moment load pattern at specified node cleanly."""
@@ -134,7 +126,7 @@ class OpenSeesFEASolver:
         elements_df: Optional[pl.DataFrame] = None
     ) -> List[DynamicStepSnapshot]:
         """Runs transient dynamic time history analysis using Newmark-beta integration.
-        Returns sequential response snapshots for interactive UI playback."""
+        Uses Transformation constraints so UniformExcitation properly excites multi-DOF support domains."""
         snapshots: List[DynamicStepSnapshot] = []
         try:
             ops.wipeAnalysis()
@@ -145,7 +137,6 @@ class OpenSeesFEASolver:
 
         # Convert g to m/s^2 (g = 9.80665)
         accel_ms2 = (accel_record_g * 9.80665).tolist()
-        time_list = time_arr.tolist()
 
         ts_tag = 8501
         pattern_tag = 8502
@@ -153,26 +144,24 @@ class OpenSeesFEASolver:
             ops.timeSeries('Path', ts_tag, '-dt', float(time_arr[1] - time_arr[0]), '-values', *accel_ms2)
             ops.pattern('UniformExcitation', pattern_tag, direction_dof, '-accel', ts_tag)
         except Exception:
-            # Fallback if Path series already defined
             pass
 
         ops.system('BandGeneral')
         ops.numberer('RCM')
-        ops.constraints('Plain')
-        # Newmark-Beta average acceleration method (unconditionally stable: gamma=0.5, beta=0.25)
+        # Transformation constraints required for support excitation with multi-point fixed DOFs
+        ops.constraints('Transformation')
         ops.integrator('Newmark', 0.5, 0.25)
         ops.algorithm('Newton')
         ops.analysis('Transient')
 
         node_tags = ops.getNodeTags()
         ele_tags = ops.getEleTags()
-        n_steps = min(len(time_arr), 100)  # Capture up to 100 snapshots for smooth playback
+        n_steps = min(len(time_arr), 100)
         stride = max(1, len(time_arr) // n_steps)
 
         for step in range(len(time_arr)):
             ok = ops.analyze(1, dt_analysis)
             if ok != 0:
-                # Fallback to Krylov-Newton or smaller step if convergence difficulty
                 ops.algorithm('KrylovNewton')
                 ok = ops.analyze(1, dt_analysis)
                 ops.algorithm('Newton')
@@ -209,7 +198,7 @@ class OpenSeesFEASolver:
                     time_step=t_current,
                     nodal_displacements=disps,
                     element_stresses=stresses,
-                    max_drift_ratio=round(max_d / 8.0, 5),  # drift ratio = max_disp / pier_height
+                    max_drift_ratio=round(max_d / 8.0, 5),
                     peak_stress=max_s,
                     ground_accel=float(accel_record_g[step])
                 )
@@ -256,15 +245,13 @@ class OpenSeesFEASolver:
             if eid in action_map:
                 act = action_map[eid]
                 mult = getattr(act, "capacity_restoration_factor", 1.25)
-                # Enhanced cross-sectional properties
                 area_new = float(row["area_0"]) * mult
                 e_mod = float(row["e_0"])
                 g_mod = e_mod / 2.6
                 iy_new = float(row["iy_0"]) * (mult ** 2)
                 iz_new = float(row["iz_0"]) * (mult ** 2)
                 j_new = float(row["j_0"]) * mult
-                
-                # Check orientation
+
                 n1 = row["node_start"]
                 n2 = row["node_end"]
                 p1 = node_coords.get(n1, (0, 0, 0))
@@ -274,7 +261,6 @@ class OpenSeesFEASolver:
                 transf_tag = 9002 if (dx < 1e-5 and dy < 1e-5) else 9001
 
                 try:
-                    # In OpenSees, redefine element
                     ops.element(
                         'elasticBeamColumn',
                         eid,

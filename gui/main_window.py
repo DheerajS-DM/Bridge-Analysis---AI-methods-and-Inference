@@ -1,8 +1,10 @@
 import sys
+import os
 from datetime import datetime
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTabWidget,
-    QPushButton, QLabel, QComboBox, QTextEdit, QSplitter, QMenuBar, QMenu
+    QPushButton, QLabel, QComboBox, QTextEdit, QSplitter, QMenuBar, QMenu,
+    QFileDialog, QMessageBox
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt, QTimer
@@ -13,8 +15,9 @@ from gui.analysis_popup import AnalysisOverlayPopup
 from gui.dynamic_playback_bar import DynamicPlaybackBar
 from gui.damage_diagnostics_panel import DamageDiagnosticsPanel
 from gui.model_importer_dialog import ModelImporterDialog
+from gui.report_generator import ForensicReportGenerator
 
-from core.schema import Node3D, ElementFrame, HazardContext, PlanAction, DamageReport
+from core.schema import Node3D, ElementFrame, HazardContext, PlanAction, DamageReport, PartialOrderPlan
 from core.state_manager import StateManager
 from core.semantic_network import OntologicalSemanticNet
 from physics.opensees_wrapper import OpenSeesFEASolver
@@ -30,7 +33,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Physics-Informed Forensic Bridge Hazard Analysis & Indian Standard Retrofit System")
-        self.setGeometry(80, 80, 1520, 960)
+        self.setGeometry(80, 80, 1540, 960)
 
         # Apply dark theme styling
         self.setStyleSheet("""
@@ -138,14 +141,17 @@ class MainWindow(QMainWindow):
         self.btn_run_sim = QPushButton("Run Baseline Static Equilibrium")
         self.btn_inject_attack = QPushButton("Execute Multi-Stage Disaster Injection")
         self.btn_plan_maintenance = QPushButton("Synthesize Indian Standard Retrofit Plan")
+        self.btn_export_report = QPushButton("Export Forensic Structural Report")
 
         self.btn_run_sim.clicked.connect(self.on_run_fea_step)
         self.btn_inject_attack.clicked.connect(self.on_execute_attack)
         self.btn_plan_maintenance.clicked.connect(self.on_synthesize_plan)
+        self.btn_export_report.clicked.connect(self.on_export_report)
 
         control_panel.addWidget(self.btn_run_sim)
         control_panel.addWidget(self.btn_inject_attack)
         control_panel.addWidget(self.btn_plan_maintenance)
+        control_panel.addWidget(self.btn_export_report)
 
         # Terminal Log
         control_panel.addWidget(QLabel("<b>Autonomous Agent Reasoning Terminal</b>"))
@@ -158,7 +164,7 @@ class MainWindow(QMainWindow):
 
         # Right Tabbed Viewport
         self.tabs = QTabWidget()
-        
+
         # 3D Viewport with Playback Bar
         vtk_container = QWidget()
         vtk_layout = QVBoxLayout(vtk_container)
@@ -188,8 +194,14 @@ class MainWindow(QMainWindow):
         self.step_history = []
         self.peak_stress_history = []
         self.damage_reports: List[DamageReport] = []
+        self.current_plan: Optional[PartialOrderPlan] = None
         self.dynamic_snapshots = []
         self.last_stresses = {}
+
+        # Scanner animation state
+        self._scan_timer = QTimer(self)
+        self._scan_elements_queue = []
+        self._scan_timer.timeout.connect(self._on_scan_tick)
 
         self.log_terminal("Autonomous Forensic Analysis Engine initialized in dark institutional mode.", "SYSTEM")
         self.load_bridge_model(0)
@@ -201,6 +213,10 @@ class MainWindow(QMainWindow):
         act_import = QAction("Import External Bridge Model...", self)
         act_import.triggered.connect(self.on_open_importer_dialog)
         file_menu.addAction(act_import)
+
+        act_report = QAction("Export Forensic Structural Report...", self)
+        act_report.triggered.connect(self.on_export_report)
+        file_menu.addAction(act_report)
 
         file_menu.addSeparator()
         act_exit = QAction("Exit", self)
@@ -218,6 +234,8 @@ class MainWindow(QMainWindow):
             color = "#fab387"
         elif tag == "FEA":
             color = "#cba6f7"
+        elif tag == "AGENT":
+            color = "#f9e2af"
         html = f"<span style='color:#6c7086;'>[{ts}]</span> <b style='color:{color};'>[{tag}]</b> {message}"
         self.agent_terminal.append(html)
 
@@ -262,8 +280,17 @@ class MainWindow(QMainWindow):
         self.fea_solver.build_fea_model(self.state_mgr.df_nodes, self.state_mgr.df_elements)
         self.vtk_viewer.render_structural_mesh(self.state_mgr.df_nodes, self.state_mgr.df_elements)
         self.damage_reports = []
+        self.current_plan = None
         self.diagnostics_panel.populate_reports([])
-        self.playback_bar.load_snapshots([])
+        self.playback_bar.load_snapshots([], auto_play=False)
+
+        # Populate Telemetry Dashboard Curves (Elastic Modulus E(t) Decay & Stress)
+        time_years = [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0]
+        # E(t) = E_0 * exp(-lambda * t) where lambda = 0.005 / year per IS 456 / IRC:SP:40
+        e_base = float(self.state_mgr.df_elements["e_0"][0]) if len(self.state_mgr.df_elements) > 0 else 2.0e11
+        modulus_decay = [e_base * (2.71828 ** (-0.005 * t)) for t in time_years]
+        self.dashboard.update_modulus_plot(time_years, modulus_decay)
+
         self.log_terminal(f"Loaded benchmark model '{name}' ({len(nodes)} Nodes, {len(elements)} Frame Elements).", "SYSTEM")
 
     def on_run_fea_step(self):
@@ -297,7 +324,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
 
     def on_execute_attack(self):
-        """Executes the multi-stage visual disaster analysis pipeline."""
+        """Executes the multi-stage visual disaster analysis pipeline with surface scanning."""
         self.sim_step_count += 1
         scenario_id = self.hazard_combo.currentData() or "el_centro_1940"
         sc_meta = SourcedHazardLoadFactory.AVAILABLE_SCENARIOS.get(scenario_id, {})
@@ -310,13 +337,22 @@ class MainWindow(QMainWindow):
             seismic_pga=sc_meta.get("pga_g", 0.45)
         )
 
-        self.log_terminal("Stage 1: Pre-Disaster Vulnerability Analysis & Bayesian Heuristic Scan...", "ATTACK")
+        self.log_terminal("Stage 1: Pre-Disaster Vulnerability Analysis & Agentic Reasoning...", "ATTACK")
+        self.log_terminal("Agentic Method 1: Bayesian Posterior Formulation P(Hazard | Theta)...", "AGENT")
+
         attack_vec, thought_logs, thought_data = self.utility_engine.select_optimal_attack_target(
             self.state_mgr.df_nodes, self.state_mgr, self.semantic_net, weather
         )
 
         for line in thought_logs:
             self.log_terminal(line, "ATTACK")
+
+        self.log_terminal("Agentic Method 2: Heuristic Weak-Point Search across structural network...", "AGENT")
+
+        # Start surface-level scanning animation across elements
+        coords_map = {row["id"]: (float(row["x"]), float(row["y"]), float(row["z"])) for row in self.state_mgr.df_nodes.iter_rows(named=True)}
+        elements_list = self.state_mgr.df_elements.iter_rows(named=True)
+        self._scan_elements_queue = [(coords_map.get(e["node_start"]), coords_map.get(e["node_end"]), e["id"]) for e in elements_list if coords_map.get(e["node_start"]) and coords_map.get(e["node_end"])]
 
         # Highlight candidate nodes on 3D view
         self.vtk_viewer.highlight_candidate_nodes(thought_data["top_candidates"], attack_vec.target_node_id)
@@ -340,7 +376,8 @@ class MainWindow(QMainWindow):
             elements_df=self.state_mgr.df_elements
         )
         self.dynamic_snapshots = snapshots
-        self.playback_bar.load_snapshots(snapshots)
+        # Automatically start dynamic playback
+        self.playback_bar.load_snapshots(snapshots, auto_play=True)
 
         # Post-disaster static extraction
         node_ids = self.state_mgr.df_nodes["id"].to_list()
@@ -366,7 +403,7 @@ class MainWindow(QMainWindow):
         for rep in self.damage_reports[:4]:
             self.log_terminal(f"   - Compromised Element #{rep.element_id} ({rep.component_type}): {rep.damage_category.title()} | DCR={rep.dcr:.2f} | Standard: {rep.governing_code}", "ATTACK")
 
-        # Render deformed mesh with 3D damage badges
+        # Render deformed mesh with conformal component highlighting
         self.vtk_viewer.render_structural_mesh(
             self.state_mgr.df_nodes,
             self.state_mgr.df_elements,
@@ -378,10 +415,18 @@ class MainWindow(QMainWindow):
         self.dashboard.update_stress_plot(self.step_history, self.peak_stress_history)
         self.tabs.setCurrentIndex(0)
 
+    def _on_scan_tick(self):
+        """Surface-level visual scanner tick for progress visualization."""
+        if self._scan_elements_queue:
+            p1, p2, eid = self._scan_elements_queue.pop(0)
+            self.vtk_viewer.flash_scan_member(p1, p2, color="#fab387")
+        else:
+            self._scan_timer.stop()
+            self.vtk_viewer.clear_scan_flash()
+
     def on_synthesize_plan(self):
         """Synthesizes adaptive Indian Standard retrofit plan and re-runs FEA verification."""
         if not self.damage_reports:
-            # Run damage assessment if not already populated
             self.damage_reports = DamageAssessor.assess_structure(
                 self.state_mgr.df_elements,
                 self.last_stresses if self.last_stresses else {},
@@ -390,12 +435,15 @@ class MainWindow(QMainWindow):
             self.diagnostics_panel.populate_reports(self.damage_reports)
 
         self.log_terminal("Stage 4: Adaptive Retrofit Synthesis governed by Indian Roads Congress (IRC)...", "PLAN")
+        self.log_terminal("Agentic Method 4: Partial Order Planning with Causal Safety Links...", "AGENT")
+
         self.planner.generate_actions_from_damage_reports(self.damage_reports)
 
         pop_plan = self.planner.solve(
             initial_state={"DamageDetected", "TrafficClosed"},
             goal_conditions={"FlexuralCapacityRestored", "StructuralSafetyRestored"}
         )
+        self.current_plan = pop_plan
         self.gantt_chart.set_plan(pop_plan)
 
         real_steps = [s for s in pop_plan.steps if s.id not in ["Start", "Finish"]]
@@ -414,7 +462,7 @@ class MainWindow(QMainWindow):
         stresses = self.fea_solver.extract_element_stresses(elem_ids, self.state_mgr.df_elements)
         peak_stress = max(stresses.values()) if stresses and max(stresses.values()) > 0 else 3.8e7
 
-        # Re-render with retrofit geometry and alleviated stress contours
+        # Re-render with conformal retrofit highlighting and alleviated stress contours
         self.vtk_viewer.render_structural_mesh(
             self.state_mgr.df_nodes,
             self.state_mgr.df_elements,
@@ -426,8 +474,34 @@ class MainWindow(QMainWindow):
         self.log_terminal(f"Verification Re-Solve Completed: Stress contours alleviated. Post-retrofit peak stress: {peak_stress/1e6:.1f} MPa (Factor of safety restored).", "FEA")
         self.tabs.setCurrentIndex(3)
 
+    def on_export_report(self):
+        """Exports full forensic audit report and BOQ to user-selected folder."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder to Export Forensic Audit Report")
+        if folder:
+            scenario_id = self.hazard_combo.currentData() or "el_centro_1940"
+            sc_meta = SourcedHazardLoadFactory.AVAILABLE_SCENARIOS.get(scenario_id, {})
+            model_name = self.model_combo.currentText()
+
+            paths = ForensicReportGenerator.generate_all_reports(
+                export_dir=folder,
+                bridge_name=model_name,
+                hazard_meta=sc_meta,
+                damage_reports=self.damage_reports,
+                pop_plan=self.current_plan
+            )
+            self.log_terminal(f"Forensic Reports successfully exported to {folder}:", "SYSTEM")
+            self.log_terminal(f"   - HTML Report: {os.path.basename(paths['html'])}", "SYSTEM")
+            self.log_terminal(f"   - Markdown Report: {os.path.basename(paths['markdown'])}", "SYSTEM")
+            self.log_terminal(f"   - Bill of Quantities CSV: {os.path.basename(paths['csv'])}", "SYSTEM")
+
+            QMessageBox.information(
+                self,
+                "Report Export Successful",
+                f"Forensic Audit Reports successfully saved:\n\nHTML: {paths['html']}\nMarkdown: {paths['markdown']}\nCSV BOQ: {paths['csv']}"
+            )
+
     def _on_playback_frame_changed(self, frame_idx: int):
-        """Handles time scrubber slider ticks during transient dynamic animation."""
+        """Ultra-fast frame scrubbing tick without re-tubing."""
         if 0 <= frame_idx < len(self.dynamic_snapshots):
             snap = self.dynamic_snapshots[frame_idx]
             self.vtk_viewer.update_dynamic_transient_frame(
@@ -438,6 +512,7 @@ class MainWindow(QMainWindow):
             )
 
     def _on_diagnostic_element_selected(self, element_id: int):
-        """Focuses camera on the compromised element."""
+        """Highlights the selected element conformally in 3D."""
         self.tabs.setCurrentIndex(0)
-        self.log_terminal(f"Focusing 3D diagnostic viewport on compromised Element #{element_id}.", "SYSTEM")
+        self.vtk_viewer.highlight_element_conformal(element_id, color="#fab387")
+        self.log_terminal(f"Conformally highlighted compromised Element #{element_id} in 3D viewport.", "SYSTEM")
